@@ -1,5 +1,6 @@
 from pathlib import Path
 
+import altair as alt
 import numpy as np
 import pandas as pd
 import streamlit as st
@@ -10,6 +11,9 @@ from tensorflow.keras.models import load_model
 BASE_DIR = Path(__file__).resolve().parent
 MODEL_PATH = BASE_DIR / "models" / "furniture_cnn.keras"
 HISTORY_IMAGE_PATH = BASE_DIR / "outputs" / "training_history.png"
+CLASS_DISTRIBUTION_PATH = BASE_DIR / "outputs" / "class_distribution.png"
+CONFUSION_MATRIX_PATH = BASE_DIR / "outputs" / "confusion_matrix.png"
+REPORT_PATH = BASE_DIR / "outputs" / "classification_report.csv"
 
 CLASS_NAMES = ["bed", "chair", "couch", "table", "wardrobe"]
 CLASS_LABELS = {
@@ -26,7 +30,6 @@ st.set_page_config(
     layout="wide",
 )
 
-
 st.markdown(
     """
     <style>
@@ -35,13 +38,13 @@ st.markdown(
         max-width: 1180px;
     }
     .result-card {
-        border-left: 6px solid #ff4b4b;
-        border-radius: 8px;
+        border-left: 6px solid #1e4e8c;
+        border-radius: 10px;
         padding: 1.2rem 1.4rem;
-        background: #fff7ed;
-        border-top: 1px solid #fed7aa;
-        border-right: 1px solid #fed7aa;
-        border-bottom: 1px solid #fed7aa;
+        background: #f8fbff;
+        border-top: 1px solid #dbeafe;
+        border-right: 1px solid #dbeafe;
+        border-bottom: 1px solid #dbeafe;
     }
     .small-muted {
         color: #6b7280;
@@ -76,6 +79,18 @@ def predict_image(model, image: Image.Image) -> tuple[str, float, np.ndarray]:
     predicted_class = CLASS_NAMES[predicted_index]
     confidence = float(probabilities[predicted_index])
     return predicted_class, confidence, probabilities
+
+
+def make_result_df(probabilities: np.ndarray) -> pd.DataFrame:
+    result_df = pd.DataFrame(
+        {
+            "카테고리": [CLASS_LABELS[name] for name in CLASS_NAMES],
+            "영문 라벨": CLASS_NAMES,
+            "예측 확률": probabilities,
+        }
+    ).sort_values("예측 확률", ascending=False)
+    result_df["예측 확률(%)"] = (result_df["예측 확률"] * 100).round(2)
+    return result_df
 
 
 st.title("가구 이미지 기반 카테고리 분류")
@@ -113,7 +128,7 @@ with tab_intro:
     )
 
     st.info(
-        "본 모델은 CIFAR-100의 32x32 저해상도 이미지로 학습되었기 때문에, "
+        "본 모델은 CIFAR-100의 32 x 32 저해상도 이미지로 학습했기 때문에 "
         "실제 고해상도 상품 이미지에서는 오분류가 발생할 수 있습니다."
     )
 
@@ -157,28 +172,34 @@ with tab_predict:
                     unsafe_allow_html=True,
                 )
 
-                result_df = pd.DataFrame(
-                    {
-                        "카테고리": [CLASS_LABELS[name] for name in CLASS_NAMES],
-                        "영문 라벨": CLASS_NAMES,
-                        "예측 확률": probabilities,
-                    }
-                ).sort_values("예측 확률", ascending=False)
-                result_df["예측 확률(%)"] = (result_df["예측 확률"] * 100).round(2)
+                result_df = make_result_df(probabilities)
 
                 st.subheader("Top-3 예측 후보")
-                st.dataframe(
-                    result_df.head(3)[["카테고리", "영문 라벨", "예측 확률(%)"]],
-                    use_container_width=True,
-                    hide_index=True,
-                )
+                top3_df = result_df.head(3)[["카테고리", "영문 라벨", "예측 확률(%)"]].copy()
+                st.dataframe(top3_df, use_container_width=True, hide_index=True)
 
                 st.subheader("클래스별 예측 확률")
-                st.bar_chart(result_df.set_index("카테고리")["예측 확률"])
-                st.dataframe(
-                    result_df[["카테고리", "영문 라벨", "예측 확률(%)"]],
-                    use_container_width=True,
-                    hide_index=True,
+                chart = (
+                    alt.Chart(result_df)
+                    .mark_bar(color="#1E4E8C")
+                    .encode(
+                        x=alt.X("카테고리:N", title="카테고리"),
+                        y=alt.Y(
+                            "예측 확률:Q",
+                            title="예측 확률",
+                            scale=alt.Scale(domain=[0, 1]),
+                        ),
+                        tooltip=["카테고리", "영문 라벨", "예측 확률(%)"],
+                    )
+                    .properties(height=320)
+                )
+                st.altair_chart(chart, use_container_width=True)
+
+                full_df = result_df[["카테고리", "영문 라벨", "예측 확률(%)"]].copy()
+                st.dataframe(full_df, use_container_width=True, hide_index=True)
+
+                st.caption(
+                    "위 표는 읽기 전용 결과표입니다. 마우스 휠을 움직여도 예측 확률 값은 변경되지 않습니다."
                 )
 
 with tab_training:
@@ -188,6 +209,19 @@ with tab_training:
         st.image(HISTORY_IMAGE_PATH, caption="학습 정확도 및 손실 그래프", use_container_width=True)
     else:
         st.warning("outputs/training_history.png 파일을 찾을 수 없습니다.")
+
+    if CLASS_DISTRIBUTION_PATH.exists():
+        st.subheader("클래스별 데이터 분포")
+        st.image(CLASS_DISTRIBUTION_PATH, use_container_width=True)
+
+    if CONFUSION_MATRIX_PATH.exists():
+        st.subheader("혼동행렬")
+        st.image(CONFUSION_MATRIX_PATH, use_container_width=True)
+
+    if REPORT_PATH.exists():
+        st.subheader("분류 성능 지표")
+        report_df = pd.read_csv(REPORT_PATH)
+        st.dataframe(report_df, use_container_width=True, hide_index=True)
 
     st.write(
         "학습된 모델은 `models/furniture_cnn.keras`로 저장되어 있으며, "
@@ -199,11 +233,10 @@ with tab_about:
     st.markdown(
         """
         이 프로젝트는 이전 웹 프로젝트에서 텍스트 기반 상품 검색만으로는 이미지의 형태와 시각적 특징을
-        반영하기 어렵다는 점에서 출발했습니다. CNN 모델을 활용하여 가구 이미지의 특징을 학습하고,
-        향후 이미지 기반 상품 검색 또는 추천 기능으로 확장할 수 있는 가능성을 확인합니다.
+        충분히 반영하기 어렵다는 점에서 출발했습니다. CNN 모델을 사용하여 가구 이미지의 특징을 학습하고,
+        향후 이미지 기반 상품 검색 또는 카테고리 자동 추천 기능으로 확장할 가능성을 확인합니다.
 
-        본 프로젝트는 학습용 공개 데이터셋인 CIFAR-100을 사용하였으며, 실제 서비스에 적용하려면
-        더 큰 실제 가구 이미지 데이터셋으로 추가 학습이 필요합니다.
+        실제 서비스에 적용하려면 CIFAR-100이 아닌 실제 쇼핑몰 가구 이미지 데이터셋으로 추가 학습이 필요합니다.
         """
     )
 
