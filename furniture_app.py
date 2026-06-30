@@ -23,7 +23,6 @@ CLASS_LABELS = {
 
 st.set_page_config(
     page_title="가구 이미지 분류",
-    page_icon="🪑",
     layout="wide",
 )
 
@@ -34,12 +33,6 @@ st.markdown(
     .block-container {
         padding-top: 2rem;
         max-width: 1180px;
-    }
-    .metric-card {
-        border: 1px solid #e5e7eb;
-        border-radius: 8px;
-        padding: 1rem;
-        background: #ffffff;
     }
     .result-card {
         border-left: 6px solid #ff4b4b;
@@ -65,10 +58,14 @@ def load_furniture_model():
     return load_model(MODEL_PATH)
 
 
-def preprocess_image(image: Image.Image) -> np.ndarray:
+def resize_for_model(image: Image.Image) -> Image.Image:
     image = image.convert("RGB")
-    image = image.resize((32, 32))
-    image_array = np.array(image) / 255.0
+    return image.resize((32, 32))
+
+
+def preprocess_image(image: Image.Image) -> np.ndarray:
+    resized_image = resize_for_model(image)
+    image_array = np.array(resized_image) / 255.0
     return np.expand_dims(image_array, axis=0)
 
 
@@ -84,38 +81,41 @@ def predict_image(model, image: Image.Image) -> tuple[str, float, np.ndarray]:
 st.title("가구 이미지 기반 카테고리 분류")
 st.caption("CIFAR-100 가구 클래스 기반 CNN 딥러닝 개인 프로젝트")
 
-intro_col, stat_col = st.columns([1.7, 1])
-
-with intro_col:
-    st.subheader("프로젝트 설명")
-    st.write(
-        "이미지를 업로드하면 학습된 CNN 모델이 가구 이미지를 "
-        "침대, 의자, 소파, 테이블, 수납장 중 하나로 분류합니다."
-    )
-    st.markdown(
-        """
-        - 사용 데이터: CIFAR-100 중 가구 관련 5개 클래스
-        - 학습 이미지: 2,500장
-        - 테스트 이미지: 500장
-        - 사용 모델: CNN 이미지 분류 모델
-        """
-    )
-
-with stat_col:
-    st.markdown('<div class="metric-card">', unsafe_allow_html=True)
-    st.metric("분류 클래스", "5개")
-    st.metric("이미지 크기", "32 x 32 RGB")
-    st.metric("저장 모델", "furniture_cnn.keras")
-    st.markdown("</div>", unsafe_allow_html=True)
-
-
 if not MODEL_PATH.exists():
     st.error("저장된 모델 파일을 찾을 수 없습니다. models/furniture_cnn.keras 파일을 확인하세요.")
     st.stop()
 
 model = load_furniture_model()
 
-tab_predict, tab_training, tab_about = st.tabs(["예측 시연", "학습 결과", "프로젝트 정보"])
+tab_intro, tab_predict, tab_training, tab_about = st.tabs(
+    ["프로젝트 설명", "예측 시연", "학습 결과", "프로젝트 정보"]
+)
+
+with tab_intro:
+    st.subheader("프로젝트 설명")
+    st.write(
+        "본 프로젝트는 CIFAR-100 데이터셋에서 가구 관련 5개 클래스를 추출하여 "
+        "CNN 모델을 학습하고, 업로드된 가구 이미지의 카테고리를 예측하는 딥러닝 프로젝트입니다."
+    )
+
+    metric_col1, metric_col2, metric_col3 = st.columns(3)
+    metric_col1.metric("분류 클래스", "5개")
+    metric_col2.metric("학습 이미지", "2,500장")
+    metric_col3.metric("테스트 이미지", "500장")
+
+    st.markdown(
+        """
+        - 예측 대상: 침대, 의자, 소파, 테이블, 수납장
+        - 사용 모델: CNN 이미지 분류 모델
+        - 이미지 크기: 32 x 32 RGB
+        - 저장 모델: `models/furniture_cnn.keras`
+        """
+    )
+
+    st.info(
+        "본 모델은 CIFAR-100의 32x32 저해상도 이미지로 학습되었기 때문에, "
+        "실제 고해상도 상품 이미지에서는 오분류가 발생할 수 있습니다."
+    )
 
 with tab_predict:
     st.subheader("이미지 업로드")
@@ -133,6 +133,12 @@ with tab_predict:
         with image_col:
             st.image(image, caption="업로드 이미지", use_container_width=True)
             st.caption("모델 입력을 위해 이미지는 내부적으로 32 x 32 크기로 변환됩니다.")
+            with st.expander("모델이 실제로 보는 32 x 32 이미지"):
+                st.image(
+                    resize_for_model(image).resize((256, 256), Image.Resampling.NEAREST),
+                    caption="32 x 32 변환 이미지",
+                    use_container_width=True,
+                )
 
         with result_col:
             if st.button("카테고리 예측하기", type="primary", use_container_width=True):
@@ -158,11 +164,19 @@ with tab_predict:
                         "예측 확률": probabilities,
                     }
                 ).sort_values("예측 확률", ascending=False)
+                result_df["예측 확률(%)"] = (result_df["예측 확률"] * 100).round(2)
+
+                st.subheader("Top-3 예측 후보")
+                st.dataframe(
+                    result_df.head(3)[["카테고리", "영문 라벨", "예측 확률(%)"]],
+                    use_container_width=True,
+                    hide_index=True,
+                )
 
                 st.subheader("클래스별 예측 확률")
                 st.bar_chart(result_df.set_index("카테고리")["예측 확률"])
                 st.dataframe(
-                    result_df.assign(예측확률표시=lambda df: (df["예측 확률"] * 100).round(2).astype(str) + "%"),
+                    result_df[["카테고리", "영문 라벨", "예측 확률(%)"]],
                     use_container_width=True,
                     hide_index=True,
                 )
